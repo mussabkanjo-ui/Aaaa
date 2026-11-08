@@ -12,7 +12,6 @@ import android.provider.MediaStore
 import android.view.Gravity
 import android.widget.*
 import androidx.activity.ComponentActivity
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import kotlin.math.max
 import kotlin.math.min
@@ -20,12 +19,15 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
 
-    private val PAGE_W_MM = 148.5f
-    private val PAGE_H_MM = 105f
-    private val MARGIN_MM = 4f
-    private val GAP_MM = 4f
+    // ===== إعدادات يمكن تعديلها =====
+    private val PAGE_W_MM = 210f            // عرض ورقة A4
+    private val PAGE_H_MM = 297f            // ارتفاع ورقة A4
+    private val MARGIN_MM = 10f             // الهامش من الأعلى والجوانب
+    private val GAP_MM = 4f                 // المسافة بين الصورتين
+    private val BLOCK_HEIGHT_FRACTION = 0.33f // الصورتين تاخدو تلت ارتفاع الورقة (0.25 = ربع)
     private val DPI = 300
     private val SHARPEN = 0.6f
+    // =================================
 
     private var uris: List<Uri> = emptyList()
     private lateinit var img1: ImageView
@@ -34,13 +36,25 @@ class MainActivity : ComponentActivity() {
     private lateinit var btnPdf: Button
 
     private val picker = registerForActivityResult(
-        ActivityResultContracts.PickMultipleVisualMedia(2)
+        ActivityResultContracts.OpenMultipleDocuments()
     ) { list ->
         if (list.size == 2) {
             uris = list
-            img1.setImageURI(list[0]); img2.setImageURI(list[1])
-            btnPdf.isEnabled = true
-            status.text = "تم اختيار الصورتين"
+            btnPdf.isEnabled = false
+            status.text = "جارٍ تحميل المعاينة..."
+            Thread {
+                try {
+                    val b1 = decode(list[0], 800)
+                    val b2 = decode(list[1], 800)
+                    runOnUiThread {
+                        img1.setImageBitmap(b1); img2.setImageBitmap(b2)
+                        btnPdf.isEnabled = true
+                        status.text = "تم اختيار الصورتين"
+                    }
+                } catch (e: Exception) {
+                    runOnUiThread { status.text = "تعذّر قراءة الصورة: ${e.message}" }
+                }
+            }.start()
         } else if (list.isNotEmpty()) {
             status.text = "اختر صورتين بالضبط"
         }
@@ -65,9 +79,7 @@ class MainActivity : ComponentActivity() {
         btnPdf = Button(this).apply { text = "إنشاء PDF"; isEnabled = false }
         status = TextView(this).apply { gravity = Gravity.CENTER; setPadding(0, pad, 0, 0) }
 
-        btnPick.setOnClickListener {
-            picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-        }
+        btnPick.setOnClickListener { picker.launch(arrayOf("image/*")) }
         btnPdf.setOnClickListener { createPdf() }
 
         root.addView(row); root.addView(btnPick); root.addView(btnPdf); root.addView(status)
@@ -103,7 +115,7 @@ class MainActivity : ComponentActivity() {
         val margin = mmToPt(MARGIN_MM)
         val gap = mmToPt(GAP_MM)
         val slotW = (pageW - 2 * margin - gap) / 2f
-        val slotH = pageH - 2 * margin
+        val slotH = pageH * BLOCK_HEIGHT_FRACTION
 
         val doc = PdfDocument()
         val page = doc.startPage(PdfDocument.PageInfo.Builder(pageW, pageH, 1).create())
@@ -139,11 +151,12 @@ class MainActivity : ComponentActivity() {
         return out
     }
 
-    private fun decode(uri: Uri): Bitmap {
+    private fun decode(uri: Uri, limit: Int = 4096): Bitmap {
         val source = ImageDecoder.createSource(contentResolver, uri)
         return ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
             decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-            if (max(info.size.width, info.size.height) > 4096) decoder.setTargetSampleSize(2)
+            val m = max(info.size.width, info.size.height)
+            if (m > limit) decoder.setTargetSampleSize((m + limit - 1) / limit)
         }
     }
 
